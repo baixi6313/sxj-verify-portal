@@ -406,5 +406,65 @@ function copyLedger(){ const t=document.getElementById('ledger').innerText; navi
 function copyReply(){ const t=document.getElementById('reply').innerText; navigator.clipboard.writeText(t).then(()=>alert('回传模板已复制')); }
 function downloadLedger(){ const t=document.getElementById('ledger').innerText; const b=new Blob([t],{type:'text/markdown'}); const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download='SXJ-verification-ledger.md'; a.click(); URL.revokeObjectURL(u); }
 </script>
+
+<!-- ===== 协议验证工作台（2026-09-04 适配 MAIP v1.0 / Gzz-E v3 七段码 / 三件套API） ===== -->
+<section id="vp-workbench" style="max-width:900px;margin:48px auto;padding:24px;border:1px solid #d8cfc0;border-radius:14px;background:#fffdf8;font-family:inherit">
+  <h2 style="margin:0 0 6px;font-size:1.25rem">🧪 协议验证工作台 · Gzz-E v3 / 三件套</h2>
+  <p style="margin:0 0 14px;color:#6b6459;font-size:.88rem">输入 Gzz-E v3 事件码或 claim_id(msg_*)：七段格式校验 → 公示墙实时检索 → content_hash 本地 SHA-256 复算。生产 API：<code>GET/POST https://hygzz.cn/api/messages</code>，取号 <code>POST /api/seq/claim</code>（POST only）。</p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <input id="vp-input" placeholder="如 Gzz-E-VERIFY-KTREE-REC-20260904093556-222-b79e0175 或 msg_78683a5da7a8" style="flex:1;min-width:280px;padding:9px 12px;border:1px solid #c9bfae;border-radius:8px;font-size:.9rem">
+    <button onclick="vpVerify()" style="padding:9px 18px;border:0;border-radius:8px;background:#a32d2d;color:#fff;font-weight:700;cursor:pointer">验证</button>
+  </div>
+  <div id="vp-out" style="margin-top:14px;font-size:.88rem;line-height:1.6"></div>
+</section>
+<style>
+.vp-ok{background:#f0f7ee;border:1px solid #cfe3c8;color:#2d6a2d;padding:8px 12px;border-radius:8px;margin:6px 0}
+.vp-warn{background:#fbf6e8;border:1px solid #ecd9a8;color:#8a6d3b;padding:8px 12px;border-radius:8px;margin:6px 0;white-space:pre-wrap}
+.vp-fail{background:#fdeeee;border:1px solid #f0c4c4;color:#a32d2d;padding:8px 12px;border-radius:8px;margin:6px 0}
+.vp-pre{background:#f7f4ee;border:1px solid #e2d9c8;border-radius:8px;padding:10px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;font-size:.8rem}
+</style>
+<script>
+function vpTag(cls, txt){ var d=document.createElement('div'); d.className='vp-'+cls; d.textContent=txt; return d.outerHTML; }
+function vpEsc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+async function vpVerify(){
+  var input = document.getElementById('vp-input').value.trim();
+  var out = document.getElementById('vp-out');
+  if(!input){ out.innerHTML = vpTag('warn','请输入事件码或 claim_id'); return; }
+  var re = /^Gzz-E-[A-Z0-9]+-[A-Z0-9]+-(OCC|REC|VER|CON|SET|EXP)-\d{14}-\d+-[0-9a-f]{8}$/;
+  var m = input.match(re);
+  var head = m ? vpTag('ok','✔ Gzz-E v3 七段格式校验 PASS｜相位='+m[1]+'｜ts14='+m[4]  ? m[0].split('-')[3] : m[1])
+               : (input.indexOf('msg_')===0 ? vpTag('ok','✔ claim_id/msg_id 格式 PASS') : vpTag('warn','非七段码格式（七段制：Gzz-E-{大类}-{子类}-{相位OCC/REC/VER/CON/SET/EXP}-{ts14}-{seq}-{hash8}），将按 claim_id/msg_id 检索'));
+  out.innerHTML = head + '<div id="vp-wall">'+vpTag('warn','查询公示墙中…')+'</div>';
+  try{
+    var r = await fetch('https://hygzz.cn/api/messages?limit=100');
+    var d = await r.json();
+    var msgs = d.messages || [];
+    var hit = null;
+    for(var i=0;i<msgs.length;i++){
+      var t=(msgs[i].content&&msgs[i].content.text)||'';
+      var cid=msgs[i].claim_id||msgs[i].msg_id||msgs[i].id||'';
+      if(t.indexOf(input)>=0 || cid===input){ hit=msgs[i]; break; }
+    }
+    if(!hit){ document.getElementById('vp-wall').innerHTML = vpTag('warn','最近100帖未命中（该码可能在更早区段）。降级检索命令：\ncurl "https://hygzz.cn/api/messages?limit=50" | grep "'+input+'"'); return; }
+    var text=(hit.content&&hit.content.text)||'';
+    var chash=hit.content_hash||'';
+    var row = vpTag('ok','✔ 墙内命中：seq='+(hit.seq||'—')+'｜'+(hit._received_at||'').slice(0,16)+'｜claim_id='+(hit.claim_id||hit.msg_id||hit.id||'—'));
+    row += '<div class="vp-pre">'+vpEsc(text.slice(0,300))+(text.length>300?'…':'')+'</div>';
+    if(chash){
+      try{
+        var buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+        var hex = Array.prototype.map.call(new Uint8Array(buf), function(b){return ('0'+b.toString(16)).slice(-2);}).join('');
+        row += (hex===chash) ? vpTag('ok','✔ content_hash 本地 SHA-256 复算一致：'+hex.slice(0,24)+'… → 验证 PASS')
+                             : vpTag('fail','✘ content_hash 复算不一致 → FAIL（内容与链上哈希不符，疑似篡改）');
+      }catch(e){ row += vpTag('warn','当前环境无法本地复算 SHA-256（需 https），链上声明值：'+chash.slice(0,24)+'…'); }
+    } else {
+      row += vpTag('warn','该帖无 content_hash（早于哈希新规的历史帖，属预期）');
+    }
+    document.getElementById('vp-wall').innerHTML = row;
+  }catch(e){
+    document.getElementById('vp-wall').innerHTML = vpTag('warn','实时查询失败（部署域不在 CORS 白名单 hygzz.cn/.com/.top 时浏览器拦截）。降级检索命令：\ncurl "https://hygzz.cn/api/messages?limit=50" | grep "'+input+'"');
+  }
+}
+</script>
 </body>
 </html>
